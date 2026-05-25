@@ -12,52 +12,32 @@ import { useAuth } from '../hooks/useAuth';
 
 const API_URL = 'https://ecotrack-api-6686.onrender.com';
 
-interface Categoria {
-  id: number;
-  nombre: string;
-  factor_co2: number;
-}
-
 export default function NuevoPesajeScreen() {
   const router = useRouter();
   const { usuario, token, logout } = useAuth();
 
-  const [categorias, setCategorias] = useState<Categoria[]>([]);
+  const [categorias, setCategorias] = useState<any[]>([]);
   const [categoriaId, setCategoriaId] = useState<string>('');
   const [peso, setPeso] = useState('');
   const [cargando, setCargando] = useState(false);
   const [cargandoCategorias, setCargandoCategorias] = useState(true);
 
-  // Cargar categorías al iniciar
   useEffect(() => {
     const cargarCategorias = async () => {
       try {
-        const response = await fetch(`${API_URL}/categorias/`, {
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`,
-          },
-        });
-
-        if (response.status === 401) {
-          await logout();
-          return;
-        }
-
+        const response = await fetch(`${API_URL}/categorias/?token=${token}`);
+        if (response.status === 401) { await logout(); return; }
         if (response.ok) {
           const datos = await response.json();
           setCategorias(datos);
-          if (datos.length > 0) {
-            setCategoriaId(String(datos[0].id));
-          }
+          if (datos.length > 0) setCategoriaId(String(datos[0].id));
         }
-      } catch (error) {
+      } catch {
         Alert.alert('Error', 'No se pudieron cargar las categorías');
       } finally {
         setCargandoCategorias(false);
       }
     };
-
     if (token) cargarCategorias();
   }, [token]);
 
@@ -66,25 +46,17 @@ export default function NuevoPesajeScreen() {
       Alert.alert('Error', 'Por favor completa todos los campos');
       return;
     }
-
     const pesoNum = parseFloat(peso.replace(',', '.'));
-
     if (isNaN(pesoNum) || pesoNum <= 0) {
-      Alert.alert('Error', 'El peso debe ser un número mayor a 0');
+      Alert.alert('Error', 'El peso debe ser mayor a 0');
       return;
     }
 
     setCargando(true);
-
     try {
-      console.log('📡 Registrando pesaje con JWT...');
-
-      const response = await fetch(`${API_URL}/registros/`, {
+      const response = await fetch(`${API_URL}/registros/?token=${token}`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           usuario_id: usuario?.id,
           categoria_id: parseInt(categoriaId),
@@ -92,33 +64,18 @@ export default function NuevoPesajeScreen() {
         }),
       });
 
-      if (response.status === 401) {
-        await logout();
-        return;
-      }
-
-      if (response.status === 403) {
-        Alert.alert('Error', 'No tienes permiso para crear este registro');
-        return;
-      }
-
-      if (!response.ok) {
-        throw new Error('Error al crear el registro');
-      }
+      if (response.status === 401) { await logout(); return; }
+      if (!response.ok) throw new Error('Error al crear el registro');
 
       const datos = await response.json();
-      console.log('✅ Registro creado:', datos);
-
       const catSeleccionada = categorias.find(c => c.id === parseInt(categoriaId));
 
       Alert.alert(
         '¡Excelente! 🌱',
-        `Has registrado ${pesoNum} kg de ${catSeleccionada?.nombre || 'material'}.\n\n¡Acabas de ahorrar ${datos.co2_ahorrado?.toFixed(2)} kg de CO₂!`,
+        `${pesoNum} kg de ${catSeleccionada?.nombre}.\n¡Ahorraste ${datos.co2_ahorrado?.toFixed(2)} kg de CO₂!`,
         [{ text: '¡Genial!', onPress: () => { setPeso(''); router.push('/(tabs)'); } }]
       );
-
-    } catch (error) {
-      console.error('❌ Error:', error);
+    } catch {
       Alert.alert('Error', 'No se pudo registrar el pesaje');
     } finally {
       setCargando(false);
@@ -138,18 +95,13 @@ export default function NuevoPesajeScreen() {
   return (
     <SafeAreaView style={styles.fondo}>
       <ScrollView contentContainerStyle={styles.scrollContainer}>
-
-        {/* Header */}
         <View style={styles.header}>
           <Ionicons name="scale-outline" size={48} color="#115E3E" style={{ marginBottom: 12 }} />
           <Text style={styles.titulo}>Nuevo Pesaje</Text>
           <Text style={styles.subtitulo}>Registra el material que reciclaste</Text>
         </View>
 
-        {/* Card Formulario */}
         <View style={styles.card}>
-
-          {/* Categoría */}
           <Text style={styles.label}>Tipo de Material</Text>
           <View style={styles.pickerContainer}>
             <Picker
@@ -167,8 +119,7 @@ export default function NuevoPesajeScreen() {
             </Picker>
           </View>
 
-          {/* Peso */}
-          <Text style={[styles.label, { marginTop: 20 }]}>Peso en kilogramos (kg)</Text>
+          <Text style={[styles.label, { marginTop: 20 }]}>Peso (kg)</Text>
           <View style={styles.inputContainer}>
             <Ionicons name="scale-outline" size={20} color="#9CA3AF" style={{ marginRight: 12 }} />
             <TextInput
@@ -183,7 +134,6 @@ export default function NuevoPesajeScreen() {
             <Text style={styles.unidad}>kg</Text>
           </View>
 
-          {/* Cálculo estimado */}
           {peso !== '' && categoriaId !== '' && (
             <View style={styles.estimado}>
               <Ionicons name="leaf-outline" size={16} color="#115E3E" />
@@ -196,22 +146,18 @@ export default function NuevoPesajeScreen() {
             </View>
           )}
 
-          {/* Botón Registrar */}
           <TouchableOpacity
             style={[styles.boton, cargando && styles.botonDeshabilitado]}
             onPress={handleRegistrar}
             disabled={cargando}
           >
-            {cargando ? (
-              <ActivityIndicator color="#FFFFFF" />
-            ) : (
+            {cargando ? <ActivityIndicator color="#FFFFFF" /> : (
               <>
                 <Ionicons name="checkmark-circle-outline" size={22} color="#FFFFFF" style={{ marginRight: 8 }} />
                 <Text style={styles.textoBoton}>Registrar Pesaje</Text>
               </>
             )}
           </TouchableOpacity>
-
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -250,9 +196,8 @@ const styles = StyleSheet.create({
   },
   estimadoTexto: { fontSize: 13, color: '#115E3E', fontWeight: '600' },
   boton: {
-    backgroundColor: '#064E3B', borderRadius: 12,
-    height: 56, flexDirection: 'row',
-    justifyContent: 'center', alignItems: 'center', marginTop: 24,
+    backgroundColor: '#064E3B', borderRadius: 12, height: 56,
+    flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginTop: 24,
   },
   botonDeshabilitado: { opacity: 0.6 },
   textoBoton: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },

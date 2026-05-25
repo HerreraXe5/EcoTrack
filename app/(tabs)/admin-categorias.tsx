@@ -1,125 +1,392 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { Ionicons } from "@expo/vector-icons";
+import { useFocusEffect } from "@react-navigation/native";
+import React, { useCallback, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Modal,
+  SafeAreaView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { useAuth } from "../hooks/useAuth";
 
 const API_URL = "https://ecotrack-api-6686.onrender.com";
 
 export default function AdminCategoriasScreen() {
-  const router = useRouter();
-  const [categorias, setCategorias] = useState([]);
+  const { token, usuario, logout } = useAuth();
+  const [categorias, setCategorias] = useState<any[]>([]);
   const [cargando, setCargando] = useState(true);
+  const [modalNueva, setModalNueva] = useState(false);
+  const [modalCalibrar, setModalCalibrar] = useState(false);
+  const [nuevoNombre, setNuevoNombre] = useState("");
+  const [nuevoFactor, setNuevoFactor] = useState("");
+  const [nuevaDesc, setNuevaDesc] = useState("");
+  const [categoriaSeleccionada, setCategoriaSeleccionada] = useState<any>(null);
+  const [nuevoFactorCalibrar, setNuevoFactorCalibrar] = useState("");
+  const [guardando, setGuardando] = useState(false);
 
-  const obtenerCategorias = async () => {
-    setCargando(true);
+  if (usuario?.rol !== "admin") {
+    return (
+      <SafeAreaView style={styles.fondo}>
+        <View
+          style={{ flex: 1, justifyContent: "center", alignItems: "center" }}
+        >
+          <Ionicons name="lock-closed-outline" size={64} color="#9CA3AF" />
+          <Text style={{ fontSize: 18, color: "#6B7280", marginTop: 16 }}>
+            Solo administradores
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  const cargarCategorias = async () => {
     try {
-      const response = await fetch(`${API_URL}/categorias/`);
-      if (response.ok) {
-        const data = await response.json();
-        setCategorias(data);
+      setCargando(true);
+      const response = await fetch(`${API_URL}/categorias/?token=${token}`);
+      if (response.status === 401) {
+        await logout();
+        return;
       }
-    } catch (error) {
-      console.error("Error al cargar categorías:", error);
-      Alert.alert('Error', 'No se pudo conectar con el servidor.');
+      if (response.ok) setCategorias(await response.json());
+    } catch {
+      Alert.alert("Error", "No se pudieron cargar las categorías");
     } finally {
       setCargando(false);
     }
   };
 
-  // Cargar las categorías al abrir la pantalla
-  useEffect(() => {
-    obtenerCategorias();
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      if (token) cargarCategorias();
+    }, [token]),
+  );
 
-  const handleNuevaCategoria = () => {
-    router.push('/admin-nueva-categoria');
+  const handleCrear = async () => {
+    if (!nuevoNombre.trim() || !nuevoFactor.trim()) {
+      Alert.alert("Error", "Nombre y factor son obligatorios");
+      return;
+    }
+    const factor = parseFloat(nuevoFactor.replace(",", "."));
+    if (isNaN(factor)) {
+      Alert.alert("Error", "Factor inválido");
+      return;
+    }
+
+    setGuardando(true);
+    try {
+      const response = await fetch(`${API_URL}/categorias/?token=${token}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          nombre: nuevoNombre.trim(),
+          factor_co2: factor,
+          descripcion: nuevaDesc.trim() || null,
+        }),
+      });
+      if (response.status === 401) {
+        await logout();
+        return;
+      }
+      if (!response.ok) throw new Error();
+      Alert.alert("✅", "Categoría creada");
+      setModalNueva(false);
+      setNuevoNombre("");
+      setNuevoFactor("");
+      setNuevaDesc("");
+      cargarCategorias();
+    } catch {
+      Alert.alert("Error", "No se pudo crear la categoría");
+    } finally {
+      setGuardando(false);
+    }
   };
 
-  // Pasamos los datos exactos de la categoría a la pantalla de edición
-  const handleEditar = (cat: any) => {
-    router.push({
-      pathname: '/admin-calibrar',
-      params: { id: cat.id, nombre: cat.nombre, factor: cat.factor_co2 }
-    });
+  const handleCalibrar = async () => {
+    const factor = parseFloat(nuevoFactorCalibrar.replace(",", "."));
+    if (isNaN(factor)) {
+      Alert.alert("Error", "Factor inválido");
+      return;
+    }
+
+    setGuardando(true);
+    try {
+      const response = await fetch(
+        `${API_URL}/categorias/${categoriaSeleccionada?.id}?token=${token}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nombre: categoriaSeleccionada?.nombre,
+            factor_co2: factor,
+            descripcion: categoriaSeleccionada?.descripcion,
+          }),
+        },
+      );
+      if (response.status === 401) {
+        await logout();
+        return;
+      }
+      if (!response.ok) throw new Error();
+      Alert.alert("✅", "Factor actualizado");
+      setModalCalibrar(false);
+      cargarCategorias();
+    } catch {
+      Alert.alert("Error", "No se pudo actualizar");
+    } finally {
+      setGuardando(false);
+    }
   };
+
+  const renderItem = ({ item }: { item: any }) => (
+    <View style={styles.itemCard}>
+      <View style={styles.itemInfo}>
+        <Text style={styles.itemNombre}>{item.nombre}</Text>
+        <Text style={styles.itemFactor}>Factor CO₂: {item.factor_co2}</Text>
+        {item.descripcion && (
+          <Text style={styles.itemDesc}>{item.descripcion}</Text>
+        )}
+      </View>
+      <TouchableOpacity
+        style={styles.btnCalibrar}
+        onPress={() => {
+          setCategoriaSeleccionada(item);
+          setNuevoFactorCalibrar(String(item.factor_co2));
+          setModalCalibrar(true);
+        }}
+      >
+        <Ionicons name="settings-outline" size={18} color="#115E3E" />
+      </TouchableOpacity>
+    </View>
+  );
+
+  if (cargando) {
+    return (
+      <SafeAreaView style={styles.fondo}>
+        <View
+          style={{ flex: 1, justifyContent: "center", alignItems: "center" }}
+        >
+          <ActivityIndicator size="large" color="#115E3E" />
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.fondo}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={24} color="#115E3E" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>EcoTrack Admin</Text>
-        {/* Botón para recargar la lista de la base de datos */}
-        <TouchableOpacity onPress={obtenerCategorias}>
-          <Ionicons name="refresh" size={24} color="#115E3E" />
-        </TouchableOpacity>
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <Text style={styles.titulo}>Administrador</Text>
+          <TouchableOpacity
+            style={styles.btnNueva}
+            onPress={() => setModalNueva(true)}
+          >
+            <Ionicons name="add" size={22} color="#FFFFFF" />
+          </TouchableOpacity>
+        </View>
+        <Text style={styles.subtitulo}>
+          {categorias.length} categorías disponibles
+        </Text>
+        <FlatList
+          data={categorias}
+          renderItem={renderItem}
+          keyExtractor={(item) => String(item.id)}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingBottom: 40 }}
+        />
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
-        <View style={styles.seccionTituloContainer}>
-          <View style={styles.textosTitulo}>
-            <Text style={styles.tituloPrincipal}>Categorías de Reciclaje</Text>
-            <Text style={styles.subtituloPrincipal}>Gestiona materiales y factores de CO2</Text>
-          </View>
-          <View style={styles.pildoraActivas}>
-            <Ionicons name="leaf-outline" size={14} color="#115E3E" />
-            <Text style={styles.textoActivas}>{categorias.length} Activas</Text>
+      {/* Modal Nueva */}
+      <Modal visible={modalNueva} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitulo}>Nueva Categoría</Text>
+            <TextInput
+              style={styles.modalInput}
+              placeholder="Nombre del material"
+              placeholderTextColor="#9CA3AF"
+              value={nuevoNombre}
+              onChangeText={setNuevoNombre}
+            />
+            <TextInput
+              style={styles.modalInput}
+              placeholder="Factor CO₂ (ej: 0.5)"
+              placeholderTextColor="#9CA3AF"
+              value={nuevoFactor}
+              onChangeText={setNuevoFactor}
+              keyboardType="decimal-pad"
+            />
+            <TextInput
+              style={styles.modalInput}
+              placeholder="Descripción (opcional)"
+              placeholderTextColor="#9CA3AF"
+              value={nuevaDesc}
+              onChangeText={setNuevaDesc}
+            />
+            <View style={styles.modalBotones}>
+              <TouchableOpacity
+                style={styles.btnCancelar}
+                onPress={() => setModalNueva(false)}
+              >
+                <Text style={styles.textoCancelar}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.btnGuardar}
+                onPress={handleCrear}
+                disabled={guardando}
+              >
+                {guardando ? (
+                  <ActivityIndicator color="#FFF" />
+                ) : (
+                  <Text style={styles.textoGuardar}>Crear</Text>
+                )}
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
+      </Modal>
 
-        {cargando ? (
-          <ActivityIndicator size="large" color="#115E3E" style={{ marginTop: 40 }} />
-        ) : categorias.length === 0 ? (
-          <Text style={{ textAlign: 'center', color: '#6B7280', marginTop: 20 }}>No hay categorías. Toca el botón + para crear una.</Text>
-        ) : (
-          categorias.map((cat: any) => (
-            <View key={cat.id} style={styles.tarjeta}>
-              <Ionicons name="sync" size={120} color="rgba(17, 94, 62, 0.04)" style={styles.marcaDeAgua} />
-              <View style={styles.tarjetaHeader}>
-                <View style={styles.iconoContainer}>
-                  <Ionicons name="cube-outline" size={20} color="#115E3E" />
-                </View>
-                <TouchableOpacity onPress={() => handleEditar(cat)}>
-                  <Ionicons name="pencil" size={20} color="#6B7280" />
-                </TouchableOpacity>
-              </View>
-              <Text style={styles.nombreCategoria}>{cat.nombre}</Text>
-              
-              <View style={styles.factorContainer}>
-                <Text style={styles.labelFactor}>FACTOR CO2</Text>
-                <Text style={styles.valorFactor}>{cat.factor_co2} kg / kg</Text>
-              </View>
+      {/* Modal Calibrar */}
+      <Modal visible={modalCalibrar} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitulo}>
+              Calibrar: {categoriaSeleccionada?.nombre}
+            </Text>
+            <Text style={styles.modalSubtitulo}>
+              Factor actual: {categoriaSeleccionada?.factor_co2}
+            </Text>
+            <TextInput
+              style={styles.modalInput}
+              placeholder="Nuevo factor CO₂"
+              placeholderTextColor="#9CA3AF"
+              value={nuevoFactorCalibrar}
+              onChangeText={setNuevoFactorCalibrar}
+              keyboardType="decimal-pad"
+            />
+            <View style={styles.modalBotones}>
+              <TouchableOpacity
+                style={styles.btnCancelar}
+                onPress={() => setModalCalibrar(false)}
+              >
+                <Text style={styles.textoCancelar}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.btnGuardar}
+                onPress={handleCalibrar}
+                disabled={guardando}
+              >
+                {guardando ? (
+                  <ActivityIndicator color="#FFF" />
+                ) : (
+                  <Text style={styles.textoGuardar}>Guardar</Text>
+                )}
+              </TouchableOpacity>
             </View>
-          ))
-        )}
-      </ScrollView>
-
-      <TouchableOpacity style={styles.fab} onPress={handleNuevaCategoria}>
-        <Ionicons name="add" size={32} color="#FFFFFF" />
-      </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  fondo: { flex: 1, backgroundColor: '#E8F7ED' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, marginTop: 10, marginBottom: 20 },
-  headerTitle: { fontSize: 22, fontWeight: '800', color: '#064E3B' },
-  scrollContainer: { paddingHorizontal: 20, paddingBottom: 100 },
-  seccionTituloContainer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 },
-  textosTitulo: { flex: 1, paddingRight: 10 },
-  tituloPrincipal: { fontSize: 18, fontWeight: '700', color: '#064E3B', marginBottom: 4 },
-  subtituloPrincipal: { fontSize: 13, color: '#4B5563' },
-  pildoraActivas: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#C6F0D5', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16 },
-  textoActivas: { color: '#115E3E', fontWeight: '700', fontSize: 12, marginLeft: 4 },
-  tarjeta: { backgroundColor: '#C6F0D5', borderRadius: 20, padding: 20, marginBottom: 16, overflow: 'hidden', position: 'relative' },
-  marcaDeAgua: { position: 'absolute', right: -20, top: 10, transform: [{ rotate: '15deg' }] },
-  tarjetaHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  iconoContainer: { width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(17, 94, 62, 0.1)', justifyContent: 'center', alignItems: 'center' },
-  nombreCategoria: { fontSize: 18, fontWeight: '800', color: '#064E3B', marginBottom: 16 },
-  factorContainer: { backgroundColor: '#F0FDF4', borderRadius: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12 },
-  labelFactor: { fontSize: 11, fontWeight: '700', color: '#6B7280', letterSpacing: 1 },
-  valorFactor: { fontSize: 16, fontWeight: '800', color: '#064E3B' },
-  fab: { position: 'absolute', bottom: 30, right: 20, width: 60, height: 60, borderRadius: 30, backgroundColor: '#064E3B', justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 5, elevation: 8 }
+  fondo: { flex: 1, backgroundColor: "#E8F7ED" },
+  container: { flex: 1, paddingHorizontal: 20, paddingTop: 20 },
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 4,
+  },
+  titulo: { fontSize: 24, fontWeight: "800", color: "#064E3B" },
+  subtitulo: { fontSize: 13, color: "#6B7280", marginBottom: 16 },
+  btnNueva: {
+    backgroundColor: "#064E3B",
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  itemCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 10,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  itemInfo: { flex: 1 },
+  itemNombre: { fontSize: 15, fontWeight: "700", color: "#064E3B" },
+  itemFactor: { fontSize: 13, color: "#115E3E", marginTop: 2 },
+  itemDesc: { fontSize: 12, color: "#9CA3AF", marginTop: 2 },
+  btnCalibrar: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: "#D1F2E0",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "flex-end",
+  },
+  modalCard: {
+    backgroundColor: "#FFFFFF",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 24,
+    paddingBottom: 40,
+  },
+  modalTitulo: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#064E3B",
+    marginBottom: 4,
+  },
+  modalSubtitulo: { fontSize: 13, color: "#6B7280", marginBottom: 16 },
+  modalInput: {
+    backgroundColor: "#F9FAFB",
+    borderWidth: 1,
+    borderColor: "#BFE9D4",
+    borderRadius: 12,
+    height: 48,
+    paddingHorizontal: 14,
+    fontSize: 15,
+    color: "#115E3E",
+    marginBottom: 12,
+  },
+  modalBotones: { flexDirection: "row", gap: 12, marginTop: 8 },
+  btnCancelar: {
+    flex: 1,
+    height: 48,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#BFE9D4",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  textoCancelar: { color: "#6B7280", fontWeight: "600" },
+  btnGuardar: {
+    flex: 1,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: "#064E3B",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  textoGuardar: { color: "#FFFFFF", fontWeight: "700" },
 });

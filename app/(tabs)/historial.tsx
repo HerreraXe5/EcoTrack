@@ -9,48 +9,26 @@ import { useAuth } from '../hooks/useAuth';
 
 const API_URL = 'https://ecotrack-api-6686.onrender.com';
 
-interface Registro {
-  id: number;
-  categoria_id: number;
-  peso_kg: number;
-  co2_ahorrado: number;
-  fecha_registro: string;
-}
-
-interface Categoria {
-  id: number;
-  nombre: string;
-}
-
 export default function HistorialScreen() {
   const { token, logout } = useAuth();
-  const [registros, setRegistros] = useState<Registro[]>([]);
-  const [categorias, setCategorias] = useState<Categoria[]>([]);
+  const [registros, setRegistros] = useState<any[]>([]);
+  const [categorias, setCategorias] = useState<any[]>([]);
   const [cargando, setCargando] = useState(true);
 
   const cargarDatos = async () => {
     try {
       setCargando(true);
-
       const [resRegistros, resCategorias] = await Promise.all([
-        fetch(`${API_URL}/registros/`, {
-          headers: { 'Authorization': `Bearer ${token}` },
-        }),
-        fetch(`${API_URL}/categorias/`, {
-          headers: { 'Authorization': `Bearer ${token}` },
-        }),
+        fetch(`${API_URL}/registros/?token=${token}`),
+        fetch(`${API_URL}/categorias/?token=${token}`),
       ]);
 
-      if (resRegistros.status === 401) {
-        await logout();
-        return;
-      }
+      if (resRegistros.status === 401) { await logout(); return; }
 
       const dataRegistros = await resRegistros.json();
       const dataCategorias = await resCategorias.json();
 
-      // Ordenar por más reciente
-      const ordenados = dataRegistros.sort((a: Registro, b: Registro) =>
+      const ordenados = dataRegistros.sort((a: any, b: any) =>
         new Date(b.fecha_registro).getTime() - new Date(a.fecha_registro).getTime()
       );
 
@@ -63,57 +41,46 @@ export default function HistorialScreen() {
     }
   };
 
-  useFocusEffect(
-    useCallback(() => {
-      if (token) cargarDatos();
-    }, [token])
-  );
+  useFocusEffect(useCallback(() => {
+    if (token) cargarDatos();
+  }, [token]));
 
   const getNombreCategoria = (categoriaId: number) => {
-    const cat = categorias.find(c => c.id === categoriaId);
-    return cat ? cat.nombre : 'Desconocido';
+    const cat = categorias.find((c: any) => c.id === categoriaId);
+    return cat ? cat.nombre : 'Material';
   };
 
   const formatearFecha = (fecha: string) => {
-    const d = new Date(fecha);
-    return d.toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' });
+    return new Date(fecha).toLocaleDateString('es-CO', {
+      day: '2-digit', month: 'short', year: 'numeric'
+    });
   };
 
   const handleEliminar = (id: number) => {
-    Alert.alert(
-      'Eliminar Registro',
-      '¿Estás seguro de que quieres eliminar este registro?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Eliminar',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const response = await fetch(`${API_URL}/registros/${id}`, {
-                method: 'DELETE',
-                headers: { 'Authorization': `Bearer ${token}` },
-              });
-
-              if (response.status === 401) {
-                await logout();
-                return;
-              }
-
-              if (response.ok) {
-                setRegistros(prev => prev.filter(r => r.id !== id));
-                Alert.alert('✅', 'Registro eliminado correctamente');
-              }
-            } catch (error) {
-              Alert.alert('Error', 'No se pudo eliminar el registro');
+    Alert.alert('Eliminar', '¿Eliminar este registro?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar', style: 'destructive',
+        onPress: async () => {
+          try {
+            const response = await fetch(
+              `${API_URL}/registros/${id}?token=${token}`,
+              { method: 'DELETE' }
+            );
+            if (response.status === 401) { await logout(); return; }
+            if (response.ok) {
+              setRegistros(prev => prev.filter(r => r.id !== id));
+              Alert.alert('✅', 'Registro eliminado');
             }
-          },
+          } catch {
+            Alert.alert('Error', 'No se pudo eliminar');
+          }
         },
-      ]
-    );
+      },
+    ]);
   };
 
-  const renderItem = ({ item }: { item: Registro }) => (
+  const renderItem = ({ item }: { item: any }) => (
     <View style={styles.itemCard}>
       <View style={styles.itemIcono}>
         <Ionicons name="leaf-outline" size={24} color="#115E3E" />
@@ -123,10 +90,7 @@ export default function HistorialScreen() {
         <Text style={styles.itemDetalle}>{item.peso_kg} kg · {item.co2_ahorrado?.toFixed(2)} kg CO₂</Text>
         <Text style={styles.itemFecha}>{formatearFecha(item.fecha_registro)}</Text>
       </View>
-      <TouchableOpacity
-        style={styles.btnEliminar}
-        onPress={() => handleEliminar(item.id)}
-      >
+      <TouchableOpacity style={styles.btnEliminar} onPress={() => handleEliminar(item.id)}>
         <Ionicons name="trash-outline" size={20} color="#EF4444" />
       </TouchableOpacity>
     </View>
@@ -145,14 +109,10 @@ export default function HistorialScreen() {
   return (
     <SafeAreaView style={styles.fondo}>
       <View style={styles.container}>
-
-        {/* Header */}
         <View style={styles.header}>
           <Text style={styles.titulo}>Historial</Text>
           <Text style={styles.subtitulo}>{registros.length} registros en total</Text>
         </View>
-
-        {/* Lista */}
         {registros.length === 0 ? (
           <View style={styles.vacio}>
             <Ionicons name="leaf-outline" size={64} color="#BFE9D4" />
