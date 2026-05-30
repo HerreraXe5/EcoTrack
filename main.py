@@ -28,7 +28,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ============= MODELOS (SIN created_at) =============
 class Usuario(Base):
     __tablename__ = "usuarios"
     id = Column(Integer, primary_key=True, index=True)
@@ -56,7 +55,6 @@ class Registro(Base):
 
 Base.metadata.create_all(bind=engine)
 
-# ============= MIGRACIÓN AUTOMÁTICA =============
 def migrar_bd():
     with engine.connect() as conn:
         for columna, definicion in [
@@ -67,31 +65,19 @@ def migrar_bd():
             try:
                 conn.execute(text(f"ALTER TABLE usuarios ADD COLUMN {columna} {definicion}"))
                 conn.commit()
-                print(f"✅ Columna {columna} agregada")
             except Exception:
                 pass
-
-        # Usuarios sin password_hash reciben contraseña temporal
         try:
             result = conn.execute(text("SELECT id, email FROM usuarios WHERE password_hash IS NULL"))
             for usuario in result.fetchall():
                 hash_temp = bcrypt.hashpw("cambiar123".encode(), bcrypt.gensalt()).decode()
                 conn.execute(text("UPDATE usuarios SET password_hash = :h WHERE id = :id"), {"h": hash_temp, "id": usuario[0]})
-                print(f"⚠️ Contraseña temporal asignada a: {usuario[1]}")
-            conn.commit()
-        except Exception as e:
-            print(f"Error migrando passwords: {e}")
-
-        # Primer usuario = admin
-        try:
-            conn.execute(text("UPDATE usuarios SET rol = 'admin' WHERE id = (SELECT MIN(id) FROM usuarios) AND (rol IS NULL OR rol = '')"))
             conn.commit()
         except Exception:
             pass
 
 migrar_bd()
 
-# ============= SCHEMAS =============
 class UsuarioBase(BaseModel):
     nombre: str
     email: str
@@ -133,7 +119,6 @@ class RegistroCreate(BaseModel):
     categoria_id: int
     peso_kg: float
 
-# ============= SEGURIDAD =============
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
@@ -177,6 +162,26 @@ def get_current_user(token: str = None, db: Session = Depends(get_db)) -> dict:
 @app.get("/")
 def health():
     return {"status": "online", "version": "2.0 with JWT"}
+
+# ============= ENDPOINT TEMPORAL PARA HACER ADMIN =============
+@app.put("/hacer-admin/{email}")
+def hacer_admin(email: str, db: Session = Depends(get_db)):
+    """
+    ENDPOINT TEMPORAL - Cambiar rol de usuario a admin por email.
+    Usar solo una vez y luego eliminar del código.
+    """
+    usuario = db.query(Usuario).filter(Usuario.email == email).first()
+    if not usuario:
+        raise HTTPException(status_code=404, detail=f"Usuario con email {email} no encontrado")
+    usuario.rol = "admin"
+    db.commit()
+    db.refresh(usuario)
+    return {
+        "message": f"✅ Usuario {usuario.nombre} ahora es ADMIN",
+        "id": usuario.id,
+        "email": usuario.email,
+        "rol": usuario.rol
+    }
 
 @app.post("/registro")
 def registrar_usuario(usuario: UsuarioCreate, db: Session = Depends(get_db)):
