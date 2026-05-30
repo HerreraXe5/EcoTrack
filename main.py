@@ -7,10 +7,9 @@ from pydantic import BaseModel
 from datetime import datetime, timedelta
 import bcrypt
 import jwt
-from typing import Optional
+from typing import Optional, List
 
-# ============= CONFIGURACIÓN =============
-DATABASE_URL = "sqlite:///./ecotrack.db"
+DATABASE_URL = "sqlite:///./ecotrack_v2.db"
 SECRET_KEY = "tu-secreto-super-seguro-cambiar-en-produccion-importante"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24
@@ -21,7 +20,6 @@ Base = declarative_base()
 
 app = FastAPI(title="EcoTrack API con JWT", version="2.0")
 
-# ============= CORS =============
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -68,8 +66,11 @@ class UsuarioBase(BaseModel):
 class UsuarioCreate(UsuarioBase):
     password: str
 
-class UsuarioResponse(UsuarioBase):
+class UsuarioResponse(BaseModel):
     id: int
+    nombre: str
+    email: str
+    telefono: Optional[str] = None
     rol: str
     class Config:
         from_attributes = True
@@ -93,10 +94,28 @@ class CategoriaBase(BaseModel):
     factor_co2: float
     descripcion: Optional[str] = None
 
+class CategoriaResponse(BaseModel):
+    id: int
+    nombre: str
+    factor_co2: float
+    descripcion: Optional[str] = None
+    class Config:
+        from_attributes = True
+
 class RegistroCreate(BaseModel):
     usuario_id: int
     categoria_id: int
     peso_kg: float
+
+class RegistroResponse(BaseModel):
+    id: int
+    usuario_id: int
+    categoria_id: int
+    peso_kg: float
+    co2_ahorrado: float
+    fecha_registro: datetime
+    class Config:
+        from_attributes = True
 
 # ============= FUNCIONES DE SEGURIDAD =============
 def hash_password(password: str) -> str:
@@ -133,7 +152,6 @@ def get_current_user(token: str = None, db: Session = Depends(get_db)) -> dict:
         raise HTTPException(status_code=401, detail="Token expirado")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Token inválido")
-
     usuario = db.query(Usuario).filter(Usuario.id == user_id).first()
     if usuario is None:
         raise HTTPException(status_code=401, detail="Usuario no encontrado")
@@ -141,26 +159,14 @@ def get_current_user(token: str = None, db: Session = Depends(get_db)) -> dict:
 
 # ============= ENDPOINTS PÚBLICOS =============
 
-@app.post("/registro", response_model=dict)
+@app.post("/registro")
 def registrar_usuario(usuario: UsuarioCreate, db: Session = Depends(get_db)):
-    """
-    Registrar nuevo usuario.
-    El PRIMER usuario que se registre será ADMIN.
-    Todos los demás serán usuarios normales.
-    """
-    # Verificar si email ya existe
     db_usuario = db.query(Usuario).filter(Usuario.email == usuario.email).first()
     if db_usuario:
         raise HTTPException(status_code=409, detail="Email ya registrado")
-
-    # Hashear contraseña
     password_hash = hash_password(usuario.password)
-
-    # Si no hay ningún usuario en la BD, el primero será admin
     total_usuarios = db.query(Usuario).count()
     rol_asignado = "admin" if total_usuarios == 0 else "usuario"
-
-    # Crear usuario
     nuevo_usuario = Usuario(
         nombre=usuario.nombre,
         email=usuario.email,
@@ -168,11 +174,9 @@ def registrar_usuario(usuario: UsuarioCreate, db: Session = Depends(get_db)):
         telefono=usuario.telefono,
         rol=rol_asignado
     )
-
     db.add(nuevo_usuario)
     db.commit()
     db.refresh(nuevo_usuario)
-
     return {
         "id": nuevo_usuario.id,
         "nombre": nuevo_usuario.nombre,
@@ -183,16 +187,13 @@ def registrar_usuario(usuario: UsuarioCreate, db: Session = Depends(get_db)):
 
 @app.post("/login", response_model=LoginResponse)
 def login(credenciales: LoginRequest, db: Session = Depends(get_db)):
-    """Login con email y contraseña, devuelve JWT"""
     usuario = db.query(Usuario).filter(Usuario.email == credenciales.email).first()
     if not usuario or not verify_password(credenciales.password, usuario.password_hash):
         raise HTTPException(status_code=401, detail="Email o contraseña incorrectos")
-
     access_token = create_access_token(
         data={"user_id": usuario.id, "email": usuario.email, "rol": usuario.rol},
         expires_delta=timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
     )
-
     return LoginResponse(
         access_token=access_token,
         token_type="bearer",
@@ -205,11 +206,12 @@ def login(credenciales: LoginRequest, db: Session = Depends(get_db)):
         )
     )
 
-@app.get("/usuarios/", response_model=list)
+@app.get("/usuarios/")
 def listar_usuarios(db: Session = Depends(get_db)):
-    return db.query(Usuario).all()
+    usuarios = db.query(Usuario).all()
+    return [{"id": u.id, "nombre": u.nombre, "email": u.email, "rol": u.rol} for u in usuarios]
 
-# ============= ENDPOINTS PROTEGIDOS =============
+# ============= ENDPOINTS PROTEGIDOS - USUARIOS =============
 
 @app.put("/usuarios/{usuario_id}")
 def actualizar_usuario(usuario_id: int, usuario_update: UsuarioBase, token: str = None, db: Session = Depends(get_db)):
@@ -226,7 +228,7 @@ def actualizar_usuario(usuario_id: int, usuario_update: UsuarioBase, token: str 
     usuario.telefono = usuario_update.telefono
     db.commit()
     db.refresh(usuario)
-    return usuario
+    return {"id": usuario.id, "nombre": usuario.nombre, "email": usuario.email, "telefono": usuario.telefono, "rol": usuario.rol}
 
 @app.delete("/usuarios/{usuario_id}")
 def eliminar_usuario(usuario_id: int, token: str = None, db: Session = Depends(get_db)):
@@ -243,12 +245,25 @@ def eliminar_usuario(usuario_id: int, token: str = None, db: Session = Depends(g
     db.commit()
     return {"message": "Cuenta eliminada exitosamente"}
 
+# ============= ENDPOINTS PROTEGIDOS - REGISTROS =============
+
 @app.get("/registros/")
 def obtener_registros(token: str = None, db: Session = Depends(get_db)):
     if not token:
         raise HTTPException(status_code=401, detail="Token requerido")
     current = get_current_user(token, db)
-    return db.query(Registro).filter(Registro.usuario_id == current["user"].id).all()
+    registros = db.query(Registro).filter(Registro.usuario_id == current["user"].id).all()
+    return [
+        {
+            "id": r.id,
+            "usuario_id": r.usuario_id,
+            "categoria_id": r.categoria_id,
+            "peso_kg": r.peso_kg,
+            "co2_ahorrado": r.co2_ahorrado,
+            "fecha_registro": r.fecha_registro
+        }
+        for r in registros
+    ]
 
 @app.post("/registros/")
 def crear_registro(registro: RegistroCreate, token: str = None, db: Session = Depends(get_db)):
@@ -295,9 +310,22 @@ def eliminar_registro(registro_id: int, token: str = None, db: Session = Depends
 
 # ============= CATEGORÍAS =============
 
-@app.get("/categorias/", response_model=list)
+@app.get("/categorias/")
 def obtener_categorias(db: Session = Depends(get_db)):
-    return db.query(Categoria).all()
+    """Obtener todas las categorías - PÚBLICO"""
+    try:
+        categorias = db.query(Categoria).all()
+        return [
+            {
+                "id": c.id,
+                "nombre": c.nombre,
+                "factor_co2": c.factor_co2,
+                "descripcion": c.descripcion
+            }
+            for c in categorias
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener categorías: {str(e)}")
 
 @app.post("/categorias/")
 def crear_categoria(categoria: CategoriaBase, token: str = None, db: Session = Depends(get_db)):
@@ -308,13 +336,18 @@ def crear_categoria(categoria: CategoriaBase, token: str = None, db: Session = D
         raise HTTPException(status_code=403, detail="Solo administradores pueden crear categorías")
     nueva_categoria = Categoria(
         nombre=categoria.nombre,
-        factor_co2=categoria.factor_co2,
+        factor_co2=float(str(categoria.factor_co2).replace(',', '.')),
         descripcion=categoria.descripcion
     )
     db.add(nueva_categoria)
     db.commit()
     db.refresh(nueva_categoria)
-    return nueva_categoria
+    return {
+        "id": nueva_categoria.id,
+        "nombre": nueva_categoria.nombre,
+        "factor_co2": nueva_categoria.factor_co2,
+        "descripcion": nueva_categoria.descripcion
+    }
 
 @app.put("/categorias/{categoria_id}")
 def actualizar_categoria(categoria_id: int, categoria_update: CategoriaBase, token: str = None, db: Session = Depends(get_db)):
@@ -326,15 +359,18 @@ def actualizar_categoria(categoria_id: int, categoria_update: CategoriaBase, tok
     categoria = db.query(Categoria).filter(Categoria.id == categoria_id).first()
     if not categoria:
         raise HTTPException(status_code=404, detail="Categoría no encontrada")
-    factor = str(categoria_update.factor_co2).replace(',', '.')
     categoria.nombre = categoria_update.nombre
-    categoria.factor_co2 = float(factor)
+    categoria.factor_co2 = float(str(categoria_update.factor_co2).replace(',', '.'))
     categoria.descripcion = categoria_update.descripcion
     db.commit()
     db.refresh(categoria)
-    return categoria
+    return {
+        "id": categoria.id,
+        "nombre": categoria.nombre,
+        "factor_co2": categoria.factor_co2,
+        "descripcion": categoria.descripcion
+    }
 
-# ============= HEALTH CHECK =============
 @app.get("/")
 def health():
     return {"status": "online", "version": "2.0 with JWT", "docs": "/docs"}
