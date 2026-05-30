@@ -28,7 +28,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ============= MODELOS =============
+# ============= MODELOS (SIN created_at) =============
 class Usuario(Base):
     __tablename__ = "usuarios"
     id = Column(Integer, primary_key=True, index=True)
@@ -37,7 +37,6 @@ class Usuario(Base):
     password_hash = Column(String, nullable=True)
     telefono = Column(String, nullable=True)
     rol = Column(String, default="usuario")
-    created_at = Column(DateTime, default=datetime.utcnow)
 
 class Categoria(Base):
     __tablename__ = "categorias"
@@ -55,60 +54,41 @@ class Registro(Base):
     co2_ahorrado = Column(Float)
     fecha_registro = Column(DateTime, default=datetime.utcnow)
 
-# Crear tablas si no existen
 Base.metadata.create_all(bind=engine)
 
 # ============= MIGRACIÓN AUTOMÁTICA =============
 def migrar_bd():
-    """Agregar columnas que faltan sin borrar datos existentes"""
     with engine.connect() as conn:
-        # Verificar y agregar password_hash si no existe
-        try:
-            conn.execute(text("ALTER TABLE usuarios ADD COLUMN password_hash VARCHAR"))
-            conn.commit()
-            print("✅ Columna password_hash agregada")
-        except Exception:
-            pass  # Ya existe, no hace nada
+        for columna, definicion in [
+            ("password_hash", "VARCHAR"),
+            ("rol", "VARCHAR DEFAULT 'usuario'"),
+            ("telefono", "VARCHAR"),
+        ]:
+            try:
+                conn.execute(text(f"ALTER TABLE usuarios ADD COLUMN {columna} {definicion}"))
+                conn.commit()
+                print(f"✅ Columna {columna} agregada")
+            except Exception:
+                pass
 
-        # Verificar y agregar rol si no existe
-        try:
-            conn.execute(text("ALTER TABLE usuarios ADD COLUMN rol VARCHAR DEFAULT 'usuario'"))
-            conn.commit()
-            print("✅ Columna rol agregada")
-        except Exception:
-            pass  # Ya existe
-
-        # Verificar y agregar telefono si no existe
-        try:
-            conn.execute(text("ALTER TABLE usuarios ADD COLUMN telefono VARCHAR"))
-            conn.commit()
-            print("✅ Columna telefono agregada")
-        except Exception:
-            pass  # Ya existe
-
-        # Actualizar usuarios existentes sin password_hash (asignar hash temporal)
+        # Usuarios sin password_hash reciben contraseña temporal
         try:
             result = conn.execute(text("SELECT id, email FROM usuarios WHERE password_hash IS NULL"))
-            usuarios_sin_hash = result.fetchall()
-            for usuario in usuarios_sin_hash:
+            for usuario in result.fetchall():
                 hash_temp = bcrypt.hashpw("cambiar123".encode(), bcrypt.gensalt()).decode()
-                conn.execute(
-                    text("UPDATE usuarios SET password_hash = :hash WHERE id = :id"),
-                    {"hash": hash_temp, "id": usuario[0]}
-                )
-                print(f"⚠️ Usuario {usuario[1]} actualizado con contraseña temporal: cambiar123")
+                conn.execute(text("UPDATE usuarios SET password_hash = :h WHERE id = :id"), {"h": hash_temp, "id": usuario[0]})
+                print(f"⚠️ Contraseña temporal asignada a: {usuario[1]}")
             conn.commit()
         except Exception as e:
-            print(f"Error actualizando usuarios: {e}")
+            print(f"Error migrando passwords: {e}")
 
-        # Asignar rol admin al primer usuario si no tiene rol
+        # Primer usuario = admin
         try:
             conn.execute(text("UPDATE usuarios SET rol = 'admin' WHERE id = (SELECT MIN(id) FROM usuarios) AND (rol IS NULL OR rol = '')"))
             conn.commit()
         except Exception:
             pass
 
-# Ejecutar migración al iniciar
 migrar_bd()
 
 # ============= SCHEMAS =============
@@ -153,7 +133,7 @@ class RegistroCreate(BaseModel):
     categoria_id: int
     peso_kg: float
 
-# ============= FUNCIONES DE SEGURIDAD =============
+# ============= SEGURIDAD =============
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
@@ -178,8 +158,8 @@ def get_current_user(token: str = None, db: Session = Depends(get_db)) -> dict:
         raise HTTPException(status_code=401, detail="Token no proporcionado")
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("email")
-        user_id: int = payload.get("user_id")
+        email = payload.get("email")
+        user_id = payload.get("user_id")
         if not email or not user_id:
             raise HTTPException(status_code=401, detail="Token inválido")
         token_data = TokenData(email=email, user_id=user_id, rol=payload.get("rol"))
@@ -200,47 +180,38 @@ def health():
 
 @app.post("/registro")
 def registrar_usuario(usuario: UsuarioCreate, db: Session = Depends(get_db)):
-    db_usuario = db.query(Usuario).filter(Usuario.email == usuario.email).first()
-    if db_usuario:
+    if db.query(Usuario).filter(Usuario.email == usuario.email).first():
         raise HTTPException(status_code=409, detail="Email ya registrado")
-    password_hash = hash_password(usuario.password)
-    total_usuarios = db.query(Usuario).count()
-    rol_asignado = "admin" if total_usuarios == 0 else "usuario"
+    total = db.query(Usuario).count()
     nuevo = Usuario(
         nombre=usuario.nombre,
         email=usuario.email,
-        password_hash=password_hash,
+        password_hash=hash_password(usuario.password),
         telefono=usuario.telefono,
-        rol=rol_asignado
+        rol="admin" if total == 0 else "usuario"
     )
     db.add(nuevo)
     db.commit()
     db.refresh(nuevo)
-    return {"id": nuevo.id, "nombre": nuevo.nombre, "email": nuevo.email, "rol": nuevo.rol, "message": f"Registrado como {rol_asignado}"}
+    return {"id": nuevo.id, "nombre": nuevo.nombre, "email": nuevo.email, "rol": nuevo.rol, "message": f"Registrado como {nuevo.rol}"}
 
 @app.post("/login", response_model=LoginResponse)
 def login(credenciales: LoginRequest, db: Session = Depends(get_db)):
     usuario = db.query(Usuario).filter(Usuario.email == credenciales.email).first()
-    if not usuario:
-        raise HTTPException(status_code=401, detail="Email o contraseña incorrectos")
-    if not usuario.password_hash:
-        raise HTTPException(status_code=401, detail="Usuario sin contraseña configurada. Contáctate con el admin.")
-    if not verify_password(credenciales.password, usuario.password_hash):
+    if not usuario or not usuario.password_hash or not verify_password(credenciales.password, usuario.password_hash):
         raise HTTPException(status_code=401, detail="Email o contraseña incorrectos")
     token = create_access_token({"user_id": usuario.id, "email": usuario.email, "rol": usuario.rol or "usuario"})
     return LoginResponse(
-        access_token=token,
-        token_type="bearer",
+        access_token=token, token_type="bearer",
         user=UsuarioResponse(id=usuario.id, nombre=usuario.nombre, email=usuario.email, telefono=usuario.telefono, rol=usuario.rol or "usuario")
     )
 
 @app.get("/usuarios/")
 def listar_usuarios(db: Session = Depends(get_db)):
-    usuarios = db.query(Usuario).all()
-    return [{"id": u.id, "nombre": u.nombre, "email": u.email, "rol": u.rol or "usuario"} for u in usuarios]
+    return [{"id": u.id, "nombre": u.nombre, "email": u.email, "rol": u.rol or "usuario"} for u in db.query(Usuario).all()]
 
 @app.put("/usuarios/{usuario_id}")
-def actualizar_usuario(usuario_id: int, usuario_update: UsuarioBase, token: str = None, db: Session = Depends(get_db)):
+def actualizar_usuario(usuario_id: int, u: UsuarioBase, token: str = None, db: Session = Depends(get_db)):
     if not token:
         raise HTTPException(status_code=401, detail="Token requerido")
     current = get_current_user(token, db)
@@ -248,10 +219,10 @@ def actualizar_usuario(usuario_id: int, usuario_update: UsuarioBase, token: str 
         raise HTTPException(status_code=403, detail="Sin permiso")
     usuario = db.query(Usuario).filter(Usuario.id == usuario_id).first()
     if not usuario:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
-    usuario.nombre = usuario_update.nombre
-    usuario.email = usuario_update.email
-    usuario.telefono = usuario_update.telefono
+        raise HTTPException(status_code=404, detail="No encontrado")
+    usuario.nombre = u.nombre
+    usuario.email = u.email
+    usuario.telefono = u.telefono
     db.commit()
     db.refresh(usuario)
     return {"id": usuario.id, "nombre": usuario.nombre, "email": usuario.email, "telefono": usuario.telefono, "rol": usuario.rol}
@@ -276,8 +247,7 @@ def obtener_registros(token: str = None, db: Session = Depends(get_db)):
     if not token:
         raise HTTPException(status_code=401, detail="Token requerido")
     current = get_current_user(token, db)
-    registros = db.query(Registro).filter(Registro.usuario_id == current["user"].id).all()
-    return [{"id": r.id, "usuario_id": r.usuario_id, "categoria_id": r.categoria_id, "peso_kg": r.peso_kg, "co2_ahorrado": r.co2_ahorrado, "fecha_registro": r.fecha_registro} for r in registros]
+    return [{"id": r.id, "usuario_id": r.usuario_id, "categoria_id": r.categoria_id, "peso_kg": r.peso_kg, "co2_ahorrado": r.co2_ahorrado, "fecha_registro": r.fecha_registro} for r in db.query(Registro).filter(Registro.usuario_id == current["user"].id).all()]
 
 @app.post("/registros/")
 def crear_registro(registro: RegistroCreate, token: str = None, db: Session = Depends(get_db)):
@@ -289,8 +259,7 @@ def crear_registro(registro: RegistroCreate, token: str = None, db: Session = De
     categoria = db.query(Categoria).filter(Categoria.id == registro.categoria_id).first()
     if not categoria:
         raise HTTPException(status_code=404, detail="Categoría no encontrada")
-    co2 = registro.peso_kg * categoria.factor_co2
-    nuevo = Registro(usuario_id=registro.usuario_id, categoria_id=registro.categoria_id, peso_kg=registro.peso_kg, co2_ahorrado=co2)
+    nuevo = Registro(usuario_id=registro.usuario_id, categoria_id=registro.categoria_id, peso_kg=registro.peso_kg, co2_ahorrado=registro.peso_kg * categoria.factor_co2)
     db.add(nuevo)
     db.commit()
     db.refresh(nuevo)
@@ -312,8 +281,7 @@ def eliminar_registro(registro_id: int, token: str = None, db: Session = Depends
 
 @app.get("/categorias/")
 def obtener_categorias(db: Session = Depends(get_db)):
-    categorias = db.query(Categoria).all()
-    return [{"id": c.id, "nombre": c.nombre, "factor_co2": c.factor_co2, "descripcion": c.descripcion} for c in categorias]
+    return [{"id": c.id, "nombre": c.nombre, "factor_co2": c.factor_co2, "descripcion": c.descripcion} for c in db.query(Categoria).all()]
 
 @app.post("/categorias/")
 def crear_categoria(categoria: CategoriaBase, token: str = None, db: Session = Depends(get_db)):
@@ -329,7 +297,7 @@ def crear_categoria(categoria: CategoriaBase, token: str = None, db: Session = D
     return {"id": nueva.id, "nombre": nueva.nombre, "factor_co2": nueva.factor_co2, "descripcion": nueva.descripcion}
 
 @app.put("/categorias/{categoria_id}")
-def actualizar_categoria(categoria_id: int, categoria_update: CategoriaBase, token: str = None, db: Session = Depends(get_db)):
+def actualizar_categoria(categoria_id: int, c: CategoriaBase, token: str = None, db: Session = Depends(get_db)):
     if not token:
         raise HTTPException(status_code=401, detail="Token requerido")
     current = get_current_user(token, db)
@@ -338,9 +306,9 @@ def actualizar_categoria(categoria_id: int, categoria_update: CategoriaBase, tok
     categoria = db.query(Categoria).filter(Categoria.id == categoria_id).first()
     if not categoria:
         raise HTTPException(status_code=404, detail="No encontrada")
-    categoria.nombre = categoria_update.nombre
-    categoria.factor_co2 = float(str(categoria_update.factor_co2).replace(',', '.'))
-    categoria.descripcion = categoria_update.descripcion
+    categoria.nombre = c.nombre
+    categoria.factor_co2 = float(str(c.factor_co2).replace(',', '.'))
+    categoria.descripcion = c.descripcion
     db.commit()
     db.refresh(categoria)
     return {"id": categoria.id, "nombre": categoria.nombre, "factor_co2": categoria.factor_co2, "descripcion": categoria.descripcion}
